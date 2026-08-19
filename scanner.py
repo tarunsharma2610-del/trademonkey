@@ -7,6 +7,7 @@ import math
 from statistics import mean
 
 from instrument_master import instrument_master
+from historical_data import HistoricalDataService
 
 # ---------------------------------------------------------------------------
 # Universes, sourced from data/nifty500.json (real 501-stock list with sectors,
@@ -101,6 +102,25 @@ FACTOR_FUNCTIONS = {
     "oi_change": factor_oi_change,
 }
 
+# Minimum usable candles each factor needs to produce a meaningful reading.
+FACTOR_MIN_CANDLES = {
+    "sma_crossover": 21,   # SMA 21 needs >= 21 closes
+    "rsi": 15,             # RSI 14 needs >= 15 closes
+    "volume_spike": 21,    # 20-candle average + the latest candle
+    "breakout": 20,        # 20-candle lookback + latest close
+    "oi_change": 5,        # previous + latest OI reading
+}
+DEFAULT_MIN_CANDLES = max(FACTOR_MIN_CANDLES.values())
+
+
+def required_candles_for_params(strategy_params):
+    """A strategy must never generate a signal from insufficient candles."""
+    weights = strategy_params.get("factors", {})
+    active = [f for f, w in weights.items() if w and f in FACTOR_MIN_CANDLES]
+    if not active:
+        return DEFAULT_MIN_CANDLES
+    return max(FACTOR_MIN_CANDLES[f] for f in active)
+
 
 def score_symbol(candles, factor_weights):
     """Returns (total_score 0-100, breakdown dict) for one symbol given >=21 candles."""
@@ -119,28 +139,48 @@ def score_symbol(candles, factor_weights):
     return round(total, 1), breakdown
 
 
-def run_scan(upstox_client, universe_symbols, instrument_key_resolver, strategy_params):
+def run_scan(upstox_client, universe_symbols, instrument_key_resolver, strategy_params,
+             historical_service=None):
     """
     universe_symbols: list of ticker strings to scan
     instrument_key_resolver: fn(symbol) -> upstox instrument_key
     strategy_params: dict, see config.DEFAULT_STRATEGY_PARAMS
 
     Returns list of dicts sorted by score desc:
-      {symbol, score, breakdown, candles}
+      {symbol, score, breakdown, candles, data_quality, data_timestamp, error}
+    No signal is produced from incomplete or stale data: symbols with fewer
+    candles than the strategy requires, or with invalid/stale candle data, get
+    score 0 and an error marker instead of a score.
     """
+    service = historical_service or HistoricalDataService(upstox_client)
     results = []
+    errors = []
     timeframe = strategy_params.get("timeframe", "30minute")
     factor_weights = strategy_params.get("factors", {})
+    required = required_candles_for_params(strategy_params)
 
     for symbol in universe_symbols:
         instrument_key = instrument_key_resolver(symbol)
         if not instrument_key:
             continue
         try:
-            candles = upstox_client.get_historical_candles(
-                instrument_key, timeframe, from_date="2024-01-01", to_date="2024-01-02"
-            )
-        except Exception:
+            hist = service.get_candles(instrument_key, timeframe, required)
+        except Exception as e:
+            errors.append({"symbol": symbol, "instrument_key": instrument_key, "error": str(e)})
+            continue
+        candles = hist["candles"]
+        if hist["is_stale"] or hist["issues"] or len(candles) < required:
+            results.append({
+                "symbol": symbol,
+                "instrument_key": instrument_key,
+                "score": 0.0,
+                "breakdown": {},
+                "candles": candles,
+                "last_close": candles[-1]["close"] if candles else None,
+                "data_quality": False,
+                "data_timestamp": hist["latest_ts"],
+                "error": "insufficient_or_invalid_data",
+            })
             continue
         score, breakdown = score_symbol(candles, factor_weights)
         results.append({
@@ -148,8 +188,11 @@ def run_scan(upstox_client, universe_symbols, instrument_key_resolver, strategy_
             "instrument_key": instrument_key,
             "score": score,
             "breakdown": breakdown,
-            "last_close": candles[-1]["close"] if candles else None,
             "candles": candles,
+            "last_close": candles[-1]["close"] if candles else None,
+            "data_quality": True,
+            "data_timestamp": hist["latest_ts"],
+            "error": None,
         })
 
     results.sort(key=lambda r: r["score"], reverse=True)

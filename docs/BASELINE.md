@@ -106,8 +106,8 @@ Database: SQLite at `data/tradebot.db` via Flask-SQLAlchemy (`models.py`).
 |-------|--------|
 | 1 — Repository baseline | DONE (this doc) |
 | 2 — Remove demo market data | DONE (commit `fix: enforce real market data only`) |
-| 3 — Historical data (dynamic dates, cache) | NEXT |
-| 4 — Live feed hardening | pending |
+| 3 — Historical data (dynamic dates, cache) | DONE (commit `fix: make historical market data dynamic and validated`) |
+| 4 — Live feed hardening | NEXT |
 | 5 — Scanner | pending |
 | 6 — Market calendar / timezone | pending |
 | 7 — Risk engine | pending |
@@ -142,3 +142,30 @@ Remaining (not in scope for Phase 2, tracked for later phases):
 - `scanner.DEMO_NIFTY500_SAMPLE` naming + missing `data/nifty500.json` /
   `data/mcx_commodities.json` (scanner/universe phase; do not fabricate).
 - `scanner.py` hardcoded `2024-01-01`/`2024-01-02` dates (Phase 3).
+
+## 6. Phase 3 completion notes
+
+- New `historical_data.py`:
+  - `historical_date_range()` computes from/to dates dynamically from required
+    candle count, timeframe, and end date — no hardcoded dates.
+  - `validate_candles()` rejects malformed candles, OHLC inconsistencies,
+    negative volume, and duplicate/out-of-order timestamps.
+  - `HistoricalDataService` caches by (instrument_key, timeframe), serves fresh
+    cache without network, and fetches only the missing incremental tail.
+  - Stale-data detection: data not covering the requested end date is flagged
+    stale (no trades on it).
+- `scanner.py`:
+  - Hardcoded 2024 dates removed; `run_scan` uses `HistoricalDataService`.
+  - `required_candles_for_params()` enforces per-factor minimum candle counts
+    (SMA21 needs 21, RSI needs 15, volume needs 21, breakout needs 20, OI needs 5).
+  - No signal from incomplete/invalid/stale data: such symbols get score 0,
+    `data_quality=False`, and an `error` marker.
+  - Results now carry `data_quality`, `data_timestamp`, and `error`.
+- Added `tests/test_historical_data.py` (dynamic ranges, validation, caching,
+  staleness, scanner minimum-candle rules). Full suite: 26 passing.
+- `python app.py` imports cleanly with no token (fails closed on data access).
+
+Remaining for Phase 3 items not fully covered (tracked):
+- Live verification of candles requires a real token (item 30) — deferred until
+  credentials are available in a runtime environment.
+- `backtest.py` still uses caller-supplied date ranges (intended, §93).
