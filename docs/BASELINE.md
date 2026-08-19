@@ -105,8 +105,8 @@ Database: SQLite at `data/tradebot.db` via Flask-SQLAlchemy (`models.py`).
 | Phase | Status |
 |-------|--------|
 | 1 — Repository baseline | DONE (this doc) |
-| 2 — Remove demo market data | NEXT |
-| 3 — Historical data (dynamic dates, cache) | pending |
+| 2 — Remove demo market data | DONE (commit `fix: enforce real market data only`) |
+| 3 — Historical data (dynamic dates, cache) | NEXT |
 | 4 — Live feed hardening | pending |
 | 5 — Scanner | pending |
 | 6 — Market calendar / timezone | pending |
@@ -116,3 +116,29 @@ Database: SQLite at `data/tradebot.db` via Flask-SQLAlchemy (`models.py`).
 | 10 — Observability | pending |
 | 11 — Notifications | pending |
 | 12+ — AI / Hermes / OpenAlgo / self-learning | pending |
+
+## 5. Phase 2 completion notes
+
+- Removed `DEMO_MODE` from `config.py` and all `demo_mode` handling.
+- Removed `_demo_price`, `_demo_candles`, `_start_demo_feed`, and the `random`
+  import from `upstox_client.py`. No fake market data path remains.
+- Added `MarketDataConfigError`; `get_ltp`, `get_quote`, `get_historical_candles`,
+  and `start_feed` now fail closed with an explicit `UPSTOX_ACCESS_TOKEN`
+  configuration error when no token is set.
+- Added `UpstoxClient.get_quote()` (OHLC quote with previous close) and rewired
+  `heatmap.py` to compute sector day-change from real last_price vs prev_close
+  instead of the demo placeholder.
+- `app.py` no longer gates the scheduler on `DEMO_MODE`; the scheduler always
+  runs. UI market-data lookups fail closed (log + empty, never fake prices).
+- `settings_store.get_api_key_status()` no longer reports `demo_mode`.
+- Fixed `instrument_master.py` to tolerate missing bundled data files (was a
+  startup crash) — does not fabricate constituents.
+- Added `tests/test_market_data.py` (11 fail-closed + parsing tests).
+- README updated: real-data-only requirement, no demo-mode instructions.
+
+Remaining (not in scope for Phase 2, tracked for later phases):
+- `perplexity_client._demo_response` placeholder text when no AI key is set
+  (AI/editorial content, not market data — address in AI phase per §119).
+- `scanner.DEMO_NIFTY500_SAMPLE` naming + missing `data/nifty500.json` /
+  `data/mcx_commodities.json` (scanner/universe phase; do not fabricate).
+- `scanner.py` hardcoded `2024-01-01`/`2024-01-02` dates (Phase 3).

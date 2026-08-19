@@ -16,10 +16,6 @@ UPSTOX_ACCESS_TOKEN = os.environ.get("UPSTOX_ACCESS_TOKEN", "")  # refreshed dai
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
 PERPLEXITY_MODEL = os.environ.get("PERPLEXITY_MODEL", "sonar-pro")
 
-# Set to True to run the whole system against fake/simulated data (no API calls).
-# Useful for developing the dashboard/UI without burning API quota.
-DEMO_MODE = os.environ.get("DEMO_MODE", "false").lower() == "true"
-
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------

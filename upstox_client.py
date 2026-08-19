@@ -7,18 +7,24 @@ Covers:
 - LTP / quote fetch (batched)
 - Historical candles
 - A token-bucket rate limiter so you never trip Upstox's per-second / per-minute caps
-- WebSocket market feed for live ticks, with an in-memory demo/mock fallback so the
-  rest of the app can be developed and tested without live market hours or a live token
+- WebSocket market feed for live ticks
+
+This module NEVER generates fake/simulated market data. If the access token is
+missing or a request fails, it raises an explicit error so the system fails
+closed instead of inventing prices.
 """
 import time
 import threading
 import collections
-import random
 import requests
 
 import config
 
 UPSTOX_BASE = "https://api.upstox.com/v2"
+
+
+class MarketDataConfigError(RuntimeError):
+    """Raised when the client is used without valid Upstox credentials."""
 
 
 class RateLimiter:
@@ -49,11 +55,17 @@ class RateLimiter:
 
 
 class UpstoxClient:
-    def __init__(self, access_token=None, demo_mode=None):
+    def __init__(self, access_token=None):
         self.access_token = access_token or config.UPSTOX_ACCESS_TOKEN
-        self.demo_mode = config.DEMO_MODE if demo_mode is None else demo_mode
         self.limiter = RateLimiter()
         self._session = requests.Session()
+
+    def _require_token(self):
+        if not self.access_token:
+            raise MarketDataConfigError(
+                "UPSTOX_ACCESS_TOKEN is not configured. Live market data requires a "
+                "valid Upstox access token; refusing to fall back to fake data."
+            )
 
     # ------------------------------------------------------------------
     # Auth
@@ -95,9 +107,7 @@ class UpstoxClient:
         """instrument_keys: list of Upstox instrument keys, e.g. NSE_EQ|INE002A01018
         Returns dict {instrument_key: ltp}
         """
-        if self.demo_mode or not self.access_token:
-            return {k: self._demo_price(k) for k in instrument_keys}
-
+        self._require_token()
         self.limiter.acquire()
         joined = ",".join(instrument_keys)
         resp = self._session.get(
@@ -109,11 +119,35 @@ class UpstoxClient:
         data = resp.json().get("data", {})
         return {v["instrument_token"]: v["last_price"] for v in data.values()}
 
+    def get_quote(self, instrument_keys):
+        """Batched OHLC quote (includes previous close), e.g. for day-change
+        calculations. Returns dict {instrument_key: {last_price, open, high,
+        low, prev_close}}."""
+        self._require_token()
+        self.limiter.acquire()
+        joined = ",".join(instrument_keys)
+        resp = self._session.get(
+            f"{UPSTOX_BASE}/market-quote/ohlc",
+            params={"instrument_key": joined},
+            headers=self._headers(),
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", {})
+        result = {}
+        for v in data.values():
+            ohlc = v.get("ohlc") or {}
+            result[v["instrument_token"]] = {
+                "last_price": v.get("last_price"),
+                "open": ohlc.get("open"),
+                "high": ohlc.get("high"),
+                "low": ohlc.get("low"),
+                "prev_close": ohlc.get("close"),
+            }
+        return result
+
     def get_historical_candles(self, instrument_key, interval, from_date, to_date):
         """interval: '1minute' | '30minute' | 'day' etc (per Upstox v2 historical-candle API)"""
-        if self.demo_mode or not self.access_token:
-            return self._demo_candles()
-
+        self._require_token()
         self.limiter.acquire()
         resp = self._session.get(
             f"{UPSTOX_BASE}/historical-candle/{instrument_key}/{interval}/{to_date}/{from_date}",
@@ -143,8 +177,7 @@ class UpstoxClient:
     # exposes a plain event emitter - no need to hand-roll .proto compilation.
     # ------------------------------------------------------------------
     def start_feed(self, instrument_keys, on_tick):
-        if self.demo_mode or not self.access_token:
-            return self._start_demo_feed(instrument_keys, on_tick)
+        self._require_token()
 
         try:
             import upstox_client as upstox_sdk
@@ -170,44 +203,3 @@ class UpstoxClient:
         streamer.on("error", lambda e: None)
         streamer.connect()
         return streamer
-
-    def _start_demo_feed(self, instrument_keys, on_tick):
-        stop_event = threading.Event()
-
-        def _loop():
-            prices = {k: self._demo_price(k) for k in instrument_keys}
-            while not stop_event.is_set():
-                for k in instrument_keys:
-                    prices[k] *= 1 + random.uniform(-0.003, 0.003)
-                    on_tick(k, round(prices[k], 2))
-                time.sleep(1)
-
-        t = threading.Thread(target=_loop, daemon=True)
-        t.start()
-        return stop_event  # call .set() to stop
-
-    # ------------------------------------------------------------------
-    # Demo helpers
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _demo_price(instrument_key):
-        random.seed(hash(instrument_key) % (2**16))
-        return round(random.uniform(100, 3500), 2)
-
-    @staticmethod
-    def _demo_candles(n=60):
-        price = random.uniform(100, 3500)
-        candles = []
-        now = time.time()
-        for i in range(n):
-            o = price
-            c = price * (1 + random.uniform(-0.01, 0.01))
-            h = max(o, c) * (1 + random.uniform(0, 0.005))
-            l = min(o, c) * (1 - random.uniform(0, 0.005))
-            v = random.randint(10_000, 500_000)
-            candles.append({
-                "ts": now - (n - i) * 1800, "open": o, "high": h, "low": l,
-                "close": c, "volume": v, "oi": random.randint(0, 100000),
-            })
-            price = c
-        return candles

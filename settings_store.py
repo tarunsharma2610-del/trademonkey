@@ -41,5 +41,4 @@ def get_api_key_status():
         "upstox_api_key": bool(config.UPSTOX_API_KEY),
         "upstox_access_token": bool(config.UPSTOX_ACCESS_TOKEN),
         "perplexity_api_key": bool(config.PERPLEXITY_API_KEY),
-        "demo_mode": config.DEMO_MODE,
     }

@@ -34,8 +34,8 @@ UPSTOX_MCX_MASTER_URL = "https://assets.upstox.com/market-quote/instruments/exch
 
 class InstrumentMaster:
     def __init__(self):
-        self._nifty500 = self._load_json(NIFTY500_PATH)
-        self._mcx_static = self._load_json(MCX_PATH)
+        self._nifty500 = self._load_json(NIFTY500_PATH) or []
+        self._mcx_static = self._load_json(MCX_PATH) or []
         self._equity_by_symbol = {row["symbol"]: row for row in self._nifty500}
         self._mcx_master_cache = self._load_json(MCX_MASTER_CACHE_PATH) or {}
 

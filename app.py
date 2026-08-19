@@ -1,4 +1,5 @@
 import json
+import logging
 import time as time_mod
 from datetime import date, datetime
 from flask import Flask, render_template, request, jsonify, redirect, url_for
@@ -23,9 +24,23 @@ app.config["SQLALCHEMY_DATABASE_URI"] = config.SQLALCHEMY_DATABASE_URI
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db.init_app(app)
 
+logger = logging.getLogger("tradebot.app")
+
 _upstox = UpstoxClient()
 _perplexity = PerplexityClient()
 _econ_events_cache = {"text": None, "ts": 0}
+
+
+def _market_data_or_empty(keys):
+    """Fetch live LTPs, but fail closed: if Upstox credentials are missing or the
+    feed errors, return {} (no fake prices ever reach the UI)."""
+    if not keys:
+        return {}
+    try:
+        return _upstox.get_ltp(keys)
+    except Exception as e:
+        logger.warning("Live market data unavailable: %s", e)
+        return {}
 
 
 def _ltp_lookup_for_all():
@@ -37,7 +52,7 @@ def _ltp_lookup_for_all():
     if not symbols:
         return {}
     keys = [f"NSE_EQ|{s}" for s in symbols]
-    raw = _upstox.get_ltp(keys)
+    raw = _market_data_or_empty(keys)
     return {s: raw.get(f"NSE_EQ|{s}") for s in symbols}
 
 
@@ -206,7 +221,7 @@ def watchlist_page():
 
     items = WatchlistItem.query.order_by(WatchlistItem.added_at.desc()).all()
     keys = [instrument_master.resolve(i.symbol, i.segment) for i in items]
-    ltp_lookup = _upstox.get_ltp([k for k in keys if k]) if keys else {}
+    ltp_lookup = _market_data_or_empty([k for k in keys if k])
     ltp_by_item = {i.id: ltp_lookup.get(instrument_master.resolve(i.symbol, i.segment)) for i in items}
     return render_template("watchlist.html", items=items, ltp_by_item=ltp_by_item, active_page="watchlist")
 
@@ -365,7 +380,7 @@ INDEX_KEYS = {
 
 @app.route("/api/indices")
 def api_indices():
-    ltp = _upstox.get_ltp(list(INDEX_KEYS.values()))
+    ltp = _market_data_or_empty(list(INDEX_KEYS.values()))
     return jsonify({name: ltp.get(key) for name, key in INDEX_KEYS.items()})
 
 
@@ -380,6 +395,5 @@ def create_tables():
 
 if __name__ == "__main__":
     create_tables()
-    if not config.DEMO_MODE:
-        sched_mod.init_scheduler(app)
-    app.run(host="0.0.0.0", port=5000, debug=config.DEMO_MODE)
+    sched_mod.init_scheduler(app)
+    app.run(host="0.0.0.0", port=5000, debug=False)

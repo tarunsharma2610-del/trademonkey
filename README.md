@@ -47,40 +47,47 @@ Flask + Upstox + Perplexity, matching the TradeBot AI dashboard design.
   to real logic (see `heatmap.py`, `backtest.py`, `calendar_data.py`,
   `alerts_engine.py`, `settings_store.py`) and real DB tables (`WatchlistItem`,
   `Alert`, `Setting`), not placeholders.
-- **Ticker bar** — `/api/indices` pulls live (or demo) LTP for Sensex/Nifty/MCX
+- **Ticker bar** — `/api/indices` pulls live LTP for Sensex/Nifty/MCX
   Crude/Gold instead of hardcoded numbers.
+
+## Real market data only
+
+This system uses **real Upstox market data** for scanning, indicators, signals,
+paper trading, portfolio valuation, alerts, and AI context. It never generates
+fake, simulated, random, or fallback prices. If the Upstox access token is
+missing or a market-data call fails, the system **fails closed** — it raises an
+explicit configuration/API error rather than inventing data.
 
 ## What still needs a manual step from you
 
 1. **MCX instrument master refresh** — call `instrument_master.refresh_mcx_master()`
-   once you're off demo mode (wire it into the pre-market job) to get real MCX
-   contract instrument_keys. The URL in that function is Upstox's published
-   instruments file - double check it against their current docs, since these
-   paths shift occasionally.
-2. **Upstox token** — since this system only ever *paper* trades, you don't need
-   daily OAuth refresh at all. Your existing long-lived, read-only **Analytics
-   Token** is enough — just set it as `UPSTOX_ACCESS_TOKEN`. `auth.py` documents
-   the full OAuth flow for the day you want to add real order placement.
-3. **Sector day-change accuracy** — `heatmap.py`'s day % change is a placeholder
-   comparison in demo mode. In live mode, swap it for Upstox's OHLC quote
-   endpoint's `close` (previous close) for accurate sector moves.
-4. **Nifty 500 list freshness** — the bundled list should be refreshed
+   (wire it into the pre-market job) to get real MCX contract instrument_keys.
+   The URL in that function is Upstox's published instruments file - double check
+   it against their current docs, since these paths shift occasionally.
+2. **Upstox token** — this system only ever *paper* trades (simulated order
+   execution against real prices). Your existing long-lived, read-only
+   **Analytics Token** is enough — just set it as `UPSTOX_ACCESS_TOKEN`.
+   `auth.py` documents the full OAuth flow for the day you want to add real
+   order placement.
+3. **Nifty 500 list freshness** — the bundled list should be refreshed
    periodically (NSE rebalances it), a quick re-run of the same download step
    used to build `data/nifty500.json`.
 
-## Local development (demo mode, no API keys needed)
+## Local development
+
+A valid `UPSTOX_ACCESS_TOKEN` is required — the system refuses to run against
+fake data.
 
 ```bash
 pip install -r requirements.txt --break-system-packages
-export DEMO_MODE=true
+export UPSTOX_ACCESS_TOKEN=...
 python app.py
 ```
 
 Visit http://localhost:5000 — a default "Conservative Swing" portfolio + "Balanced
 Swing" strategy is seeded automatically on first run.
 
-In demo mode, `app.py` does **not** start the scheduler (so the UI is easy to develop
-against without background jobs firing). To exercise the scheduler locally:
+To run the scheduler alongside the UI (background jobs):
 
 ```bash
 python3 -c "
@@ -104,7 +111,6 @@ app.app.run(port=5000)
    export UPSTOX_REDIRECT_URI=https://yourdomain/upstox/callback
    export UPSTOX_ACCESS_TOKEN=...   # refreshed daily
    export PERPLEXITY_API_KEY=...
-   export DEMO_MODE=false
    ```
 4. Run the Flask UI and the scheduler as **two separate systemd services** (the
    scheduler should keep running even if you restart the web process):
@@ -112,8 +118,8 @@ app.app.run(port=5000)
    # tradebot-web.service -> gunicorn app:app --bind 0.0.0.0:5000
    # tradebot-scheduler.service -> python3 -c "import app, scheduler; app.create_tables(); scheduler.init_scheduler(app.app); import time; [time.sleep(3600) for _ in iter(int,1)]"
    ```
-   (Or simply run `python app.py` with `DEMO_MODE=false`, which starts both in one
-   process — fine to start with, split later once you want independent restarts.)
+   (Or simply run `python app.py`, which starts both in one process — fine to
+   start with, split later once you want independent restarts.)
 5. Put nginx in front with a TLS cert if you want to access the dashboard remotely.
 
 ## Project layout
@@ -121,7 +127,7 @@ app.app.run(port=5000)
 ```
 config.py            balance presets, market hours, strategy defaults, risk limits
 models.py             Portfolio, Strategy, Trade, ScanResult, AuditLog, DailyReport, NewsletterIssue
-upstox_client.py       REST + WebSocket wrapper, rate limiter, demo-mode fallback
+upstox_client.py       REST + WebSocket wrapper, rate limiter, fail-closed real data only
 perplexity_client.py   pre-market brief + newsletter copy generation
 scanner.py             5-factor scoring engine
 strategy_engine.py     entry/exit decisions, dynamic SL/target, position sizing

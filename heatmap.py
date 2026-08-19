@@ -1,7 +1,7 @@
 """
 Sector Heatmap: groups the Nifty 500 universe by sector (from instrument_master's
-bundled sector data) and computes an average day % change per sector, using
-whatever LTP source is available (demo or live).
+bundled sector data) and computes an average day % change per sector, using the
+Upstox OHLC quote endpoint (last_price vs previous close) for real moves.
 """
 from statistics import mean
 from instrument_master import instrument_master
@@ -25,19 +25,17 @@ def compute_heatmap(upstox_client=None, sample_per_sector=6):
         if not keys:
             continue
 
-        ltp_now = client.get_ltp(keys)
-        # In demo mode there's no separate "previous close" endpoint wired up yet,
-        # so we approximate day-change with a second, slightly-jittered demo read.
-        # In live mode, swap this for the OHLC quote endpoint's `close` (prev close)
-        # via /market-quote/ohlc for a real day % change.
+        quotes = client.get_quote(keys)
         changes = []
         for sym, key in zip(symbols, keys):
-            ltp = ltp_now.get(key)
-            if ltp is None:
+            quote = quotes.get(key)
+            if not quote:
                 continue
-            prev = client._demo_price(key) if client.demo_mode else ltp  # placeholder for prev close
-            if prev:
-                changes.append({"symbol": sym, "change_pct": round((ltp - prev) / prev * 100, 2)})
+            ltp = quote.get("last_price")
+            prev = quote.get("prev_close")
+            if ltp is None or not prev:
+                continue
+            changes.append({"symbol": sym, "change_pct": round((ltp - prev) / prev * 100, 2)})
 
         if not changes:
             continue
