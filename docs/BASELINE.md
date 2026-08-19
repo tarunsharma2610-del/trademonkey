@@ -1,0 +1,118 @@
+# TradeBot AI — Repository Baseline (Phase 1)
+
+Date: 2026-08-19
+Branch: main
+
+This document is the Phase 1 repository baseline per `instruction.md` §121
+(PHASE 1 — REPOSITORY BASELINE). It records the dependency map, known issues,
+and the state of the repository before subsequent phases begin. It also serves
+as the running handover doc: each phase updates this file with what was done
+and what remains.
+
+## 1. Dependency map
+
+```
+app.py  (Flask routes + JSON APIs)
+   -> config.py, settings_store.py, models.py
+   -> portfolio_manager.py, reports.py, newsletter.py
+   -> scheduler.py, upstox_client.py, instrument_master.py
+   -> scanner.py, heatmap.py, backtest.py, calendar_data.py
+   -> perplexity_client.py
+
+scheduler.py  (APScheduler background jobs)
+   -> config.py, settings_store.py, models.py
+   -> upstox_client.py, perplexity_client.py, instrument_master.py
+   -> scanner.py, strategy_engine.py, trade_executor.py, alerts_engine.py
+
+scanner.py
+   -> instrument_master.py
+   (pure factor/score functions; receives candles + strategy params)
+
+strategy_engine.py  (pure decision functions)
+trade_executor.py   (sole mutator of Portfolio.cash_balance / Trade rows)
+   -> models.py, strategy_engine.py
+
+upstox_client.py  (Upstox REST + WebSocket wrapper, token-bucket rate limiter)
+   -> config.py
+
+instrument_master.py  (ISIN-based equity resolution + MCX master cache)
+   -> data/nifty500.json, data/mcx_commodities.json (NOT PRESENT in repo)
+
+heatmap.py, backtest.py, calendar_data.py, alerts_engine.py, reports.py,
+newsletter.py, perplexity_client.py, portfolio_manager.py, models.py, auth.py
+```
+
+Runtime entry points:
+- `python app.py` — Flask UI + (previously, when not DEMO_MODE) scheduler.
+- `python scheduler.py` — documented as the long-lived loop (does not currently
+  have a `__main__` block; runs via `init_scheduler(app)` from app.py).
+
+Database: SQLite at `data/tradebot.db` via Flask-SQLAlchemy (`models.py`).
+
+## 2. Baseline findings
+
+### 2.1 Demo / fake market data (P0 — Phase 2)
+- `upstox_client.py`: `_demo_price`, `_demo_candles`, `_start_demo_feed`,
+  `demo_mode` constructor flag, `import random`. Demo fallback is reachable
+  whenever `config.DEMO_MODE` is true OR the access token is missing.
+- `config.py`: `DEMO_MODE` env toggle (default false).
+- `app.py`: scheduler is skipped when `DEMO_MODE`; `debug=DEMO_MODE`.
+- `heatmap.py`: previous-close placeholder uses `client._demo_price()` in
+  demo mode.
+- `settings_store.py`: exposes `demo_mode` in API-key status.
+
+### 2.2 Non-market-data demo placeholders
+- `perplexity_client.py`: `_demo_response` placeholder text when
+  `PERPLEXITY_API_KEY` is missing. This is AI/editorial content, not market
+  data; intentionally left out of the market-data removal phase. Address under
+  AI-failure behavior (§119) in the AI phase.
+
+### 2.3 Hardcoded historical dates (P0 — Phase 3)
+- `scanner.py:141` uses `from_date="2024-01-01", to_date="2024-01-02"`.
+- `backtest.py` takes user-supplied dates (OK for backtests).
+
+### 2.4 Bundled universe files missing
+- `instrument_master.py` reads `data/nifty500.json` / `data/mcx_commodities.json`;
+  neither file is present in the repo, so `NIFTY500`/`MCX_COMMODITIES` are
+  empty and `scanner.DEMO_NIFTY500_SAMPLE` falls back to a hardcoded list.
+- Do NOT fabricate constituents (instruction §46). Needs a real sourced copy.
+
+### 2.5 Timezone handling inconsistent (P0 — Phase 6)
+- `datetime.now()`, `datetime.utcnow()`, `date.today()` mixed across
+  `scheduler.py`, `models.py`, `trade_executor.py`.
+
+### 2.6 Risk calculation (P0 — Phase 7)
+- `scheduler._global_risk_ok` uses lifetime `realized_pnl` / starting balance
+  as a proxy for today's loss (§4.6, §34).
+
+### 2.7 WebSocket error handling weak (P0 — Phase 4)
+- `start_feed` swallows errors (`streamer.on("error", lambda e: None)`), no
+  reconnect/heartbeat/stale detection.
+
+### 2.8 Test baseline (Phase 1 item 10)
+- No `tests/` directory exists. pytest added as a dev dependency.
+
+### 2.9 .gitignore
+- Strengthened to match §70 (`.env.*`, `*.db`, `*.sqlite*`, `logs/`, `*.log`,
+  `venv/`).
+
+## 3. Secrets check
+- No `.env` file committed; all credentials read from environment variables in
+  `config.py`. `git log` shows a single commit (initial upload).
+
+## 4. Phase progress
+
+| Phase | Status |
+|-------|--------|
+| 1 — Repository baseline | DONE (this doc) |
+| 2 — Remove demo market data | NEXT |
+| 3 — Historical data (dynamic dates, cache) | pending |
+| 4 — Live feed hardening | pending |
+| 5 — Scanner | pending |
+| 6 — Market calendar / timezone | pending |
+| 7 — Risk engine | pending |
+| 8 — Execution layer | pending |
+| 9 — Database hardening | pending |
+| 10 — Observability | pending |
+| 11 — Notifications | pending |
+| 12+ — AI / Hermes / OpenAlgo / self-learning | pending |
